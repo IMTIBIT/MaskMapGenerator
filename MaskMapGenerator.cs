@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEditor;
 using UnityEngine.EventSystems;
+using System.Net.NetworkInformation;
 
 public class MaskMapGenerator : EditorWindow
 {
@@ -14,6 +15,8 @@ public class MaskMapGenerator : EditorWindow
 
     Texture2D maskMapPreview;
 
+    float brightness = 1.0f;
+
     [MenuItem("Tools/Mask Map Generator")]
     public static void ShowWindow()
     {
@@ -21,16 +24,24 @@ public class MaskMapGenerator : EditorWindow
     }
 
     private void OnEnable()
-{
-    // Register this script with the event system to receive mouse events
-    EventSystem.current.SetSelectedGameObject(null);
-}
+    {
+        // Check if EventSystem.current is not null before registering
+        if (EventSystem.current != null)
+        {
+            EventSystem.current.SetSelectedGameObject(null);
+        }
+    }
+
 
     private void OnDisable()
     {
-        // Deregister this script from the event system when the window is closed
-        EventSystem.current.SetSelectedGameObject(null);
+        // Check if EventSystem.current is not null before de-registering
+        if (EventSystem.current != null)
+        {
+            EventSystem.current.SetSelectedGameObject(null);
+        }
     }
+
 
     private void OnGUI()
     {
@@ -54,17 +65,23 @@ public class MaskMapGenerator : EditorWindow
 
         EditorGUILayout.Space();
 
+        brightness = EditorGUILayout.Slider("Brightness", brightness, 0.0f, 2.0f);
+
+        if (maskMapPreview == null)
+        {
+            maskMapPreview = new Texture2D(128, 128, TextureFormat.ARGB32, false);
+        }
+
+        UpdateMaskMapPreview();
+
+        // Display a preview of the mask map
+        EditorGUILayout.Space();
+        Rect previewRect = GUILayoutUtility.GetRect(128, 128, GUILayout.ExpandWidth(true));
+        EditorGUI.DrawTextureTransparent(previewRect, maskMapPreview, ScaleMode.ScaleToFit);
+
         if (GUILayout.Button("Generate Mask Map"))
         {
             CalculateMaskMap();
-        }
-
-        // Display a preview of the mask map
-        if (maskMapPreview != null)
-        {
-            EditorGUILayout.Space();
-            Rect previewRect = GUILayoutUtility.GetRect(128, 128, GUILayout.ExpandWidth(true));
-            EditorGUI.DrawTextureTransparent(previewRect, maskMapPreview, ScaleMode.ScaleToFit);
         }
 
         EditorGUILayout.EndVertical();
@@ -89,21 +106,36 @@ public class MaskMapGenerator : EditorWindow
 
         Texture2D maskMap = new Texture2D(width, height, TextureFormat.ARGB32, true);
 
-        for (int y = 0; y < height; y++)
+        Color[] albedoPixels = albedoTexture.GetPixels();
+        Color[] normalPixels = normalTexture.GetPixels();
+        Color[] metallicPixels = metallicTexture.GetPixels();
+        Color[] roughnessPixels = roughnessTexture.GetPixels();
+        Color[] aoPixels = aoTexture.GetPixels();
+
+        Color[] maskMapPixels = new Color[width * height];
+
+        System.Threading.Tasks.Parallel.For(0, height, y =>
         {
             for (int x = 0; x < width; x++)
             {
-                Color albedoPixel = albedoTexture.GetPixel(x, y);
-                Color normalPixel = normalTexture.GetPixel(x, y);
-                Color metallicPixel = metallicTexture.GetPixel(x, y);
-                Color roughnessPixel = roughnessTexture.GetPixel(x, y);
-                Color aoPixel = aoTexture.GetPixel(x, y);
+                int index = y * width + x;
 
-                Color maskMapPixel = new Color(albedoPixel.r, normalPixel.g, metallicPixel.b, roughnessPixel.r);
-                maskMap.SetPixel(x, y, maskMapPixel);
+                Color albedoPixel = albedoPixels[index];
+                Color normalPixel = normalPixels[index];
+                Color metallicPixel = metallicPixels[index];
+                Color roughnessPixel = roughnessPixels[index];
+
+                // Apply brightness adjustment
+                albedoPixel *= brightness;
+                normalPixel *= brightness;
+                metallicPixel *= brightness;
+                roughnessPixel *= brightness;
+
+                maskMapPixels[index] = new Color(albedoPixel.r, normalPixel.g, metallicPixel.b, roughnessPixel.r);
             }
-        }
+        });
 
+        maskMap.SetPixels(maskMapPixels);
         maskMap.Apply();
 
         // Save the mask map to disk
@@ -112,6 +144,77 @@ public class MaskMapGenerator : EditorWindow
         // Update the mask map preview texture
         maskMapPreview = maskMap;
     }
+
+    void UpdateMaskMapPreview()
+    {
+        if (albedoTexture == null || normalTexture == null || metallicTexture == null || roughnessTexture == null || aoTexture == null)
+        {
+            return;
+        }
+
+        albedoTexture = MakeTextureReadable(albedoTexture);
+        normalTexture = MakeTextureReadable(normalTexture);
+        metallicTexture = MakeTextureReadable(metallicTexture);
+        roughnessTexture = MakeTextureReadable(roughnessTexture);
+        aoTexture = MakeTextureReadable(aoTexture);
+
+        int width = maskMapPreview.width;
+        int height = maskMapPreview.height;
+
+        Texture2D maskMap = new Texture2D(width, height, TextureFormat.ARGB32, false);
+
+        Color[] albedoPixels = albedoTexture.GetPixels();
+        Color[] normalPixels = normalTexture.GetPixels();
+        Color[] metallicPixels = metallicTexture.GetPixels();
+        Color[] roughnessPixels = roughnessTexture.GetPixels();
+        Color[] aoPixels = aoTexture.GetPixels();
+
+        Color[] maskMapPixels = new Color[width * height];
+
+        int albedoWidth = albedoTexture.width;
+        int albedoHeight = albedoTexture.height;
+        int normalWidth = normalTexture.width;
+        int normalHeight = normalTexture.height;
+        int metallicWidth = metallicTexture.width;
+        int metallicHeight = metallicTexture.height;
+        int roughnessWidth = roughnessTexture.width;
+        int roughnessHeight = roughnessTexture.height;
+
+        System.Threading.Tasks.Parallel.For(0, height, y =>
+        {
+            for (int x = 0; x < width; x++)
+            {
+                int index = y * width + x;
+
+                int albedoIndex = Mathf.FloorToInt(y * (float)albedoHeight / height) * albedoWidth + Mathf.FloorToInt(x * (float)albedoWidth / width);
+                int normalIndex = Mathf.FloorToInt(y * (float)normalHeight / height) * normalWidth + Mathf.FloorToInt(x * (float)normalWidth / width);
+                int metallicIndex = Mathf.FloorToInt(y * (float)metallicHeight / height) * metallicWidth + Mathf.FloorToInt(x * (float)metallicWidth / width);
+                int roughnessIndex = Mathf.FloorToInt(y * (float)roughnessHeight / height) * roughnessWidth + Mathf.FloorToInt(x * (float)roughnessWidth / width);
+
+                Color albedoPixel = albedoPixels[albedoIndex];
+                Color normalPixel = normalPixels[normalIndex];
+                Color metallicPixel = metallicPixels[metallicIndex];
+                Color roughnessPixel = roughnessPixels[roughnessIndex];
+
+                // Apply brightness adjustment
+                albedoPixel *= brightness;
+                normalPixel *= brightness;
+                metallicPixel *= brightness;
+                roughnessPixel *= brightness;
+
+                maskMapPixels[index] = new Color(albedoPixel.r, normalPixel.g, metallicPixel.b, roughnessPixel.r);
+            }
+        });
+
+        maskMap.SetPixels(maskMapPixels);
+        maskMap.Apply();
+
+        maskMapPreview = maskMap;
+    }
+
+
+
+
 
     void SaveMaskMapToAssetDatabase(Texture2D maskMap)
     {
@@ -133,7 +236,6 @@ public class MaskMapGenerator : EditorWindow
             }
         }
     }
-
     Texture2D MakeTextureReadable(Texture2D source)
     {
         if (!source.isReadable)
@@ -151,4 +253,3 @@ public class MaskMapGenerator : EditorWindow
         return source;
     }
 }
-
